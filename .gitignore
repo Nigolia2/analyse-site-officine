@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+# fichiers sources officiels (volumineux), à garder hors du dépôt
+*.CSV
+BPE*.csv
+FILO*.csv
+georef-france-iris*.csv

@@ -1,0 +1,34 @@
+# Exemple de configuration Caddy (https://caddyserver.com) pour héberger l'outil.
+# Remplacer analyse.exemple.fr par votre nom de domaine et /chemin/vers/le/depot par le
+# dossier où le dépôt a été copié. La clé Geoapify est lue dans la variable d'environnement
+# GEOAPIFY_KEY du service Caddy : elle n'est jamais envoyée au navigateur.
+#
+# IMPORTANT : sans protection, n'importe qui pourrait utiliser l'outil et consommer votre
+# quota Geoapify. Ajoutez une authentification (ici basic_auth, mot de passe haché avec
+# « caddy hash-password ») ou réservez l'accès à votre réseau. Voir docs/installation.md.
+
+analyse.exemple.fr {
+	encode gzip zstd
+
+	basic_auth {
+		# utilisateur  empreinte-du-mot-de-passe
+		equipe $2a$14$REMPLACER_PAR_LA_SORTIE_DE_caddy_hash-password
+	}
+
+	# Zone de trajet : relais vers Geoapify avec la clé ajoutée côté serveur.
+	handle_path /geoapify-iso/* {
+		rewrite * /v1/isoline?{query}&apiKey={$GEOAPIFY_KEY}
+		reverse_proxy https://api.geoapify.com {
+			header_up Host api.geoapify.com
+		}
+	}
+
+	# La page doit toujours être relue (elle porte les numéros de version des autres fichiers).
+	@page path / /index.html
+	header @page Cache-Control "no-cache"
+
+	handle {
+		root * /chemin/vers/le/depot/app
+		file_server
+	}
+}

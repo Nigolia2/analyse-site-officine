@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Analyse de site — Officine</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="commun/ios-theme.css" />
+<style>
+  :root {
+    --accent: #0F766E;           /* pétrole-teal, identité géomarketing santé (cf. maquette) */
+    --accent-ink: #0b5a54;
+    --ink: #0f172a; --muted: #64748b; --line: #e6eaee;
+    --feu-vert: #16a34a; --feu-orange: #f59e0b; --feu-rouge: #dc2626;
+    --c-med: #0F766E; --c-mat: #f59e0b; --c-cos: #8b5cf6;
+    --panel-w: 384px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; height: 100vh; overflow: hidden; color: var(--ink); }
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---- barre de contrôle isochrone (haut) ---- */
+  .ctrl { display: flex; flex-direction: column; gap: 8px; }
+  .ctrl-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; padding: 0; cursor: pointer; color: var(--ink); }
+  .ctrl-title { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 7px; color: var(--ink); }
+  .ctrl-title .ctt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctrl-state { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  .ctrl:not(.collapsed) .ctrl-state { display: none; }
+  .ctrl-chev { display: inline-flex; flex: none; transition: transform .2s; }
+  .ctrl:not(.collapsed) .ctrl-chev { transform: rotate(180deg); }
+  .ctrl.collapsed .ctrl-body { display: none; }
+  .ctrl-body { display: flex; flex-direction: column; gap: 8px; }
+  .seg { display: flex; gap: 4px; }
+  .seg button { flex: 1; min-width: 0; padding: 7px 8px; border: .5px solid var(--glass-brd); border-radius: 999px;
+                background: rgba(255,255,255,.6); font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .seg button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ctrl-hint { font-size: 12px; color: var(--muted); }
+  .heat-ctrl { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; width: min(340px, calc(100vw - 24px)); }
+  .heat-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; padding: 2px 0; cursor: pointer; color: var(--ink); }
+  .heat-lbl { font-size: 13px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .heat-state { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .heat-chev { display: inline-flex; transition: transform .2s; }
+  .heat-ctrl:not(.collapsed) .heat-chev { transform: rotate(180deg); }
+  .heat-ctrl.collapsed .heat-body { display: none; }
+  .heat-body { display: flex; flex-direction: column; gap: 8px; }
+  #seg-heat { width: 100%; }
+  .heat-ftitle { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .heat-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .heat-chip { display: flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 4px 8px; border-radius: 999px; border: .5px solid var(--glass-brd); background: rgba(255,255,255,.5); color: var(--ink); cursor: pointer; }
+  .heat-chip .sw { width: 11px; height: 11px; border-radius: 3px; }
+  .heat-chip.off { opacity: .4; text-decoration: line-through; }
+
+  /* ---- fiche (panneau résultat) ---- */
+  /* mobile-first : bottom sheet (en-tête à mi-écran, ✕ toujours atteignable, hors Dynamic Island) */
+  #fiche {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1200;
+    max-height: 82vh; max-height: 82dvh;   /* dvh = suit la zone visible iOS (barre Safari) */
+    background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    border-top: .5px solid var(--glass-brd); border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 32px rgba(15,23,42,.18);
+    transform: translateY(101%); transition: transform .32s cubic-bezier(.32,.72,0,1);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #fiche.open { transform: none; }
+  #fiche.peek { transform: translateY(calc(100% - 66px)); }   /* réduit : seul l'en-tête dépasse */
+  #fiche.dragging { transition: none; }
+  .fiche-hd { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 22px 16px 12px; border-bottom: .5px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+  .fiche-hd::before { content: ''; position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: 38px; height: 5px; border-radius: 999px; background: rgba(120,120,128,.35); }
+  .fiche-hd .ft { flex: 1; min-width: 0; }
+  .fiche-hd h1 { font-size: 17px; font-weight: 700; line-height: 1.2; }
+  .fiche-hd .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .fiche-x { border: none; background: rgba(120,120,128,.18); width: 34px; height: 34px; border-radius: 999px; cursor: pointer; flex-shrink: 0; display: grid; place-items: center; color: var(--ink); }
+  .fiche-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px calc(28px + env(safe-area-inset-bottom, 0px)); }
+  .fiche-body::-webkit-scrollbar { width: 0; }
+  #f-actions { display: flex; gap: 6px; padding: 8px 12px; border-bottom: .5px solid var(--line); }
+  #f-actions button { flex: 1; min-width: 0; font-size: 11.5px; font-weight: 600; padding: 8px 4px; border-radius: 10px; border: .5px solid var(--line); background: rgba(255,255,255,.55); color: var(--ink); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
+  #f-actions button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #toast { position: absolute; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: rgba(15,23,42,.92); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; z-index: 1600; opacity: 0; transition: opacity .2s; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,.3); max-width: 80vw; text-align: center; }
+  #toast.show { opacity: 1; }
+  /* rapport hors-écran (capturé par html2canvas → PDF) : thème clair forcé */
+  #report { display: none; }
+  #report-inner { width: 800px; padding: 24px; background: #fff; color: #152019;
+    --ink:#152019; --muted:#586a62; --line:#e4ebe7; --accent:#0F766E; --accent-ink:#0b5a54; --glass:#fff;
+    --feu-vert:#16a34a; --feu-orange:#f59e0b; --feu-rouge:#dc2626; --c-med:#0F766E; --c-mat:#f59e0b; --c-cos:#8b5cf6; }
+  #report-inner .ca-card, #report-inner .kpi, #report-inner .note, #report-inner .feu, #report-inner .verdict-badge {
+    background: #fff; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  #report-inner .kpi, #report-inner .ca-card { border: 1px solid #ddd; }
+  #report-inner .rep-head { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid #0F766E; }
+  #report-inner .rep-head h1 { font-size: 24px; font-weight: 800; margin: 2px 0; }
+  #report-inner .rep-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #0F766E; }
+  #report-inner .rep-sub { font-size: 12px; color: #555; margin-top: 3px; }
+  /* html2canvas gère mal grid → flex pour le rapport */
+  #report-inner .kpis { display: flex; flex-wrap: wrap; gap: 8px; }
+  #report-inner .kpi { width: calc(50% - 4px); }
+  #report-inner .dcmp { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; }
+  #report-inner .dcmp .bar2 { flex-basis: 100%; }
+  #report-inner .sec-h { display: flex; }
+
+  .feu { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 10px; font-weight: 700; font-size: 13px; }
+  .feu .dot { width: 10px; height: 10px; border-radius: 999px; }
+  .feu.vert { background: rgba(22,163,74,.12); color: #15803d; } .feu.vert .dot { background: var(--feu-vert); }
+  .feu.orange { background: rgba(245,158,11,.14); color: #b45309; } .feu.orange .dot { background: var(--feu-orange); }
+  .feu.rouge { background: rgba(220,38,38,.12); color: #b91c1c; } .feu.rouge .dot { background: var(--feu-rouge); }
+
+  .sec { margin-top: 20px; }
+  .sec-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .sec-h .n { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: .04em; }
+  .sec-h h2 { font-size: 13.5px; font-weight: 700; }
+  .sec-h .hint { margin-left: auto; font-size: 11px; color: var(--muted); }
+
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { background: rgba(255,255,255,.55); border: .5px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .kpi .k { font-size: 11px; color: var(--muted); font-weight: 600; }
+  .kpi .v { font-size: 19px; font-weight: 700; margin-top: 2px; }
+  .kpi .d { font-size: 11px; margin-top: 1px; color: var(--muted); }
+  .kpi .d.up { color: #15803d; } .kpi .d.down { color: #b91c1c; }
+
+  .ca-card { background: linear-gradient(135deg, rgba(15,118,110,.10), rgba(15,118,110,.03)); border: .5px solid rgba(15,118,110,.25); border-radius: 14px; padding: 14px; }
+  .ca-big { font-size: 30px; font-weight: 800; color: var(--accent-ink); line-height: 1; }
+  .ca-big .u { font-size: 14px; font-weight: 600; color: var(--muted); }
+  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; margin: 12px 0 8px; }
+  .bar > span { display: block; height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; }
+  .legend .it { display: flex; align-items: center; gap: 5px; }
+  .legend .sw { width: 9px; height: 9px; border-radius: 3px; }
+
+  .rows { display: flex; flex-direction: column; gap: 1px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 2px; border-bottom: .5px solid var(--line); font-size: 13px; }
+  .row:last-child { border-bottom: none; }
+  .row .lab { color: #334155; } .row .val { font-weight: 700; }
+  .row .val small { font-weight: 500; color: var(--muted); }
+  .mini-h { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .mbar { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+  .mbar-l { color: #334155; }
+  .mbar-t { height: 8px; border-radius: 4px; background: rgba(120,120,128,.16); overflow: hidden; }
+  .mbar-t > i { display: block; height: 100%; border-radius: 4px; }
+  .mbar-v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .note { background: rgba(15,118,110,.06); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; color: #334155; margin-top: 10px; }
+  .note b { color: var(--ink); }
+
+  /* verdict de synthèse */
+  .drivers { list-style: none; display: grid; gap: 9px; margin-top: 12px; }
+  .drivers li { display: flex; gap: 9px; align-items: flex-start; font-size: 12.7px; line-height: 1.45; }
+  .drivers .ic { width: 18px; height: 18px; border-radius: 6px; flex: none; display: grid; place-items: center; font-weight: 800; font-size: 12px; margin-top: 1px; }
+  .drivers .pos .ic { background: rgba(22,163,74,.14); color: #15803d; }
+  .drivers .neg .ic { background: rgba(220,38,38,.12); color: #b91c1c; }
+  .drivers .neu .ic { background: var(--line); color: var(--muted); }
+  /* table concurrents */
+  .ctab { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  .ctab td { padding: 7px 2px; border-bottom: .5px solid var(--line); }
+  .ctab tr:last-child td { border-bottom: none; }
+  .ctab .d { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent-ink); }
+  .ctab .c { color: var(--muted); font-size: 11.5px; }
+  /* densité vs France */
+  .dcmp { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; font-size: 12.7px; padding: 8px 0; border-bottom: .5px solid var(--line); }
+  .dcmp:last-child { border-bottom: none; }
+  .dcmp .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .dcmp .bar2 { grid-column: 1 / 3; height: 7px; border-radius: 5px; background: rgba(120,120,128,.16); position: relative; margin-top: 4px; }
+  .dcmp .bar2 > i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
+  .dcmp .bar2 > u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); opacity: .45; }
+  /* anneaux */
+  .ring { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 12.7px; border-bottom: .5px solid var(--line); }
+  .ring:last-child { border-bottom: none; }
+  .ring .sw { width: 13px; height: 13px; border-radius: 50%; flex: none; }
+  .ring .v { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ring .s { color: var(--muted); font-size: 11.5px; }
+
+  /* overlay chargement / vide */
+  #boot { position: absolute; inset: 0; z-index: 1500; display: grid; place-items: center; background: rgba(248,250,251,.9); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  #boot .card { text-align: center; color: var(--muted); font-size: 13px; }
+  .spin { width: 26px; height: 26px; border: 3px solid rgba(15,118,110,.2); border-top-color: var(--accent); border-radius: 999px; animation: sp 1s linear infinite; margin: 0 auto 10px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .empty-hint { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 900; background: rgba(15,23,42,.82); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; pointer-events: none; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+  /* barre du bas plus compacte (la recherche prenait toute la largeur) */
+  body.ios-theme .ios-bottom { width: min(440px, calc(100% - 24px)); left: 50%; right: auto; transform: translateX(-50%); }
+  body.ios-theme #searchbar { width: 100%; }
+  #city-input { padding: 9px 14px; }
+  /* fiche ouverte sur mobile : masquer la barre du bas (couverte par la feuille, évite le chevauchement au clavier) */
+  @media (max-width: 680px) { body.fiche-open .ios-bottom { display: none; } }
+
+  /* grand écran : side-panel à droite (le bottom sheet reste le défaut mobile) */
+  @media (min-width: 681px) {
+    #fiche { top: 0; bottom: 0; right: 0; left: auto; width: clamp(420px, 32vw, 640px); height: 100%; max-height: none;
+             border-radius: 0; border-top: none; border-left: .5px solid var(--glass-brd);
+             box-shadow: -8px 0 32px rgba(15,23,42,.14); transform: translateX(101%); }
+    #fiche.open { transform: none; }
+    #fiche.peek { transform: none; }
+    .fiche-hd { padding-top: 16px; touch-action: auto; cursor: default; }
+    .fiche-hd::before { display: none; }
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e8edf2; --muted: #94a3b8; --line: rgba(255,255,255,.10); }
+    body { color: var(--ink); }
+    .kpi, .seg button { background: rgba(30,41,59,.5); }
+    #boot { background: rgba(15,23,42,.9); }
+    .fiche-x { background: rgba(255,255,255,.14); }
+  }
+</style>
+</head>
+<body class="ios-theme">
+<div id="map"></div>
+
+<!-- barre haut : titre + réglages isochrone -->
+<div class="ios-top">
+  <div class="ctrl cmap-glass" id="analysis-panel" style="padding:10px 14px;width:min(340px,calc(100vw - 24px))">
+    <button class="ctrl-head" id="analysis-toggle" type="button">
+      <span class="ctrl-title"><span data-ph="storefront" data-size="19" data-color="#0F766E"></span> <span class="ctt">Analyse de site — Officine</span></span>
+      <span class="ctrl-state" id="analysis-state">Voiture · 10′</span>
+      <span class="ctrl-chev" data-ph="caret-down" data-size="14" data-color="#64748b"></span>
+    </button>
+    <div class="ctrl-body">
+      <div class="seg" id="seg-mode">
+        <button data-m="drive" class="sel"><span data-ph="car" data-size="15"></span> Voiture</button>
+        <button data-m="walk"><span data-ph="person-simple-walk" data-size="15"></span> À pied</button>
+      </div>
+      <div class="seg" id="seg-time">
+        <button data-t="5">5′</button><button data-t="10" class="sel">10′</button>
+        <button data-t="15">15′</button><button data-t="20">20′</button><button data-t="30">30′</button>
+      </div>
+      <div class="ctrl-hint">Touchez la carte (ou cherchez une adresse) pour analyser un emplacement.</div>
+    </div>
+  </div>
+  <div class="heat-ctrl cmap-glass collapsed" id="heat-panel">
+    <button class="heat-head" id="heat-toggle" type="button">
+      <span class="heat-lbl"><span data-ph="stack" data-size="15" data-color="#0F766E"></span> Calques</span>
+      <span class="heat-state" id="heat-state">Aucun</span>
+      <span class="heat-chev" data-ph="caret-down" data-size="14" data-color="#64748b"></span>
+    </button>
+    <div class="heat-body">
+      <div class="seg" id="seg-heat">
+        <button data-h="" class="sel">Aucun</button>
+        <button data-h="year">Ouverture</button>
+        <button data-h="rev">Revenu</button>
+      </div>
+      <div id="heat-filters"></div>
+    </div>
+  </div>
+</div>
+
+<!-- barre bas : recherche + géoloc -->
+<div class="ios-bottom">
+  <div class="ios-tools">
+    <button id="locate-btn" title="Ma position"></button>
+  </div>
+  <div id="searchbar" class="cmap-search">
+    <input id="city-input" type="text" placeholder="Adresse ou commune…" />
+    <button id="search-btn" title="Rechercher"><span data-ph="magnifying-glass" data-size="19" data-color="#fff"></span></button>
+  </div>
+</div>
+
+<div class="empty-hint" id="empty-hint">Touchez la carte pour lancer une analyse</div>
+
+<!-- fiche résultat -->
+<div id="fiche"><div class="fiche-hd">
+  <div class="ft"><h1 id="f-title">—</h1><div class="sub" id="f-sub"></div></div>
+  <button class="fiche-x" id="f-close" title="Fermer"><span data-ph="x" data-size="16"></span></button>
+</div>
+<div id="f-actions">
+  <button id="act-share"><span data-ph="share-network" data-size="15"></span> Partager</button>
+  <button id="act-pdf"><span data-ph="file-pdf" data-size="15"></span> PDF</button>
+  <button id="act-csv"><span data-ph="file-xls" data-size="15"></span> Excel</button>
+  <button id="act-geojson"><span data-ph="map-trifold" data-size="15"></span> GeoJSON</button>
+</div>
+<div class="fiche-body" id="f-body"></div></div>
+
+<div id="toast"></div>
+<div id="report"><div id="report-inner"></div></div>
+
+<div id="boot"><div class="card"><div class="spin"></div><span id="boot-txt">Chargement des données France…</span></div></div>
+
+<!-- Diagnostic : affiche toute erreur (throw au démarrage, import ES, fetch) dans l'overlay
+     au lieu de laisser le spinner tourner indéfiniment. -->
+<script>
+  function bootErr(msg) {
+    var b = document.getElementById('boot'); if (!b) return; b.dataset.err = '1';
+    b.innerHTML = '<div class="card" style="max-width:82vw;text-align:left"><b>⚠️ Blocage au chargement</b>'
+      + '<div style="font-size:12px;margin-top:8px;color:#b91c1c;word-break:break-word">' + msg + '</div>'
+      + '<div style="font-size:11px;margin-top:10px;color:#64748b">Recharge la page ; si ça persiste, copie ce message.</div></div>';
+  }
+  window.addEventListener('error', function (e) {
+    if (e && e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK'))
+      return bootErr('Échec de chargement : ' + (e.target.src || e.target.href));
+    bootErr((e.message || 'erreur JS') + ' — ' + (e.filename || '') + ':' + (e.lineno || ''));
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason; bootErr('Requête échouée : ' + (r && r.message ? r.message : r));
+  });
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b && b.style.display !== 'none' && !b.dataset.err)
+      bootErr('Délai dépassé (>25 s) sans réponse — chargement des données probablement bloqué.');
+  }, 25000);
+</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="commun/map-common.js"></script>
+<script type="module">
+window.__PAGE_V__ = '2026-08-04';
+// ?v= versionné : index.html est servi no-cache, donc changer ce numéro force le rechargement
+// du moteur (sinon Caddy peut servir un engine.js en cache = champs manquants dans la fiche).
+import { indexData, analyze, zonePopulation, CONFIG } from './engine.js?v=20260731g';
+
+// ---------- carte ----------
+const map = L.map('map', { tap: false, zoomControl: true }).setView([46.6, 2.5], 6);
+map._skipAutoOpen = true;
+addBasemap(map, 'INSEE (RP, Filosofi, BPE) · Geoapify');  // fond commun : CMAP_BASEMAP dans map-common.js
+attachDoubleTapDragZoom(map);
+attachGeolocation(map, 'locate-btn');
+
+// ---------- état ----------
+let idx = null;                                  // données indexées
+let state = { lat: null, lon: null, mode: 'drive', minutes: 10, implCom: null, name: '' };
+let marker = null, ringLayers = [], runToken = null, genLayer = null, pharmLayer = null;
+let pharmBaseLayer = null;                        // couche officines "toujours visible" (hors analyse)
+const PHARM_BASE_ZOOM = 12;                       // seuil d'apparition (ajustable)
+let lastResult = null, lastIsoFull = null;       // pour les exports
+const boot = document.getElementById('boot');
+const emptyHint = document.getElementById('empty-hint');
+
+// ---------- calques heatmap (par-dessus la carte) ----------
+function yearColor(y) {                         // y = années avant nouvelle officine possible (-1 = jamais, 0 = déjà)
+  if (y < 0) return '#dc2626';                  // rouge : déclin → jamais
+  if (y <= 1) return '#16a34a';                 // vert : ≤ 1 an / déjà possible
+  if (y <= 3) return '#84cc16';                 // vert-jaune : 2-3 ans
+  if (y <= 5) return '#eab308';                 // jaune : 4-5 ans
+  return '#f59e0b';                             // orange : > 5 ans (mais atteignable)
+}
+function potColor(v, th) {                       // th = 4 seuils de quintiles
+  if (v < th[0]) return '#dc2626';
+  if (v < th[1]) return '#f59e0b';
+  if (v < th[2]) return '#eab308';
+  if (v < th[3]) return '#84cc16';
+  return '#16a34a';
+}
+function buildHeatData(idx) {
+  const { iris, fi, fc } = idx, acc = new Map();
+  for (const r of iris.rows) {                   // centroïde commune = moyenne des IRIS
+    const c = r[fi.com]; let a = acc.get(c); if (!a) { a = [0, 0, 0]; acc.set(c, a); }
+    a[0] += r[fi.lon]; a[1] += r[fi.lat]; a[2]++;
+  }
+  const Q = CONFIG.quota, pts = [];
+  for (const [com, a] of acc) {
+    const pop = idx.comPopAll.get(com) || 0; if (pop < 60) continue;
+    const lon = a[0] / a[2], lat = a[1] / a[2];
+    const exist = idx.comPharmaAll.get(com) || 0;
+    const allowedNow = pop >= Q.seuil1 ? 1 + Math.floor((pop - Q.seuil1) / Q.tranche) : 0;
+    let years;
+    if (allowedNow > exist) years = 0;           // création déjà possible
+    else {
+      const threshold = Q.seuil1 + exist * Q.tranche;   // pop nécessaire pour la prochaine
+      const ev = idx.evolBy.get(com); let rate = null;
+      if (ev) { const p0 = ev[2] || ev[1], p1 = ev[4], yrs = ev[2] ? 11 : 16; if (p0 > 0 && p1 > 0) rate = Math.pow(p1 / p0, 1 / yrs) - 1; }
+      years = (rate == null || rate <= 0.0005) ? -1 : (threshold - pop) / (pop * rate);
+    }
+    const cr = idx.comBy.get(com); const med = cr ? cr[fc.med] : null;
+    const potential = pop * (med ? med / CONFIG.nat.income : 1) / Math.max(exist, 1);
+    pts.push({ lon, lat, years, potential, yearColor: yearColor(years) });
+  }
+  const sorted = pts.map(p => p.potential).sort((x, y) => x - y);
+  const q = f => sorted[Math.floor(f * (sorted.length - 1))];
+  const th = [q(.2), q(.4), q(.6), q(.8)];
+  for (const p of pts) p.revColor = potColor(p.potential, th);
+  return pts;
+}
+const HeatCanvas = L.Layer.extend({
+  initialize(pts) { this._pts = pts; this._key = 'yearColor'; this._filter = null; },
+  setKey(k) { this._key = k; this._reset(); return this; },
+  setFilter(set) { this._filter = set; this._reset(); return this; },
+  onAdd(map) {
+    this._map = map;
+    const c = this._canvas = L.DomUtil.create('canvas');
+    c.style.position = 'absolute'; c.style.pointerEvents = 'none';
+    map.getPanes().overlayPane.appendChild(c);
+    map.on('moveend zoomend resize', this._reset, this);
+    this._reset();
+  },
+  onRemove(map) { L.DomUtil.remove(this._canvas); map.off('moveend zoomend resize', this._reset, this); },
+  _reset() {
+    if (!this._map) return;
+    L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
+    const s = this._map.getSize(); this._canvas.width = s.x; this._canvas.height = s.y;
+    this._draw();
+  },
+  _draw() {
+    const map = this._map, ctx = this._canvas.getContext('2d');
+    ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+    const z = map.getZoom(), r = Math.max(2.5, (z - 4) * 1.5);
+    const b = map.getBounds().pad(0.15), S = b.getSouth(), N = b.getNorth(), W = b.getWest(), E = b.getEast();
+    ctx.globalAlpha = 0.5;
+    const f = this._filter, key = this._key;
+    for (const p of this._pts) {
+      const col = p[key];
+      if (f && !f.has(col)) continue;
+      if (p.lat < S || p.lat > N || p.lon < W || p.lon > E) continue;
+      const pt = map.latLngToContainerPoint([p.lat, p.lon]);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  },
+});
+let heatLayer = null;
+const HEAT_LEGEND = {
+  yearColor: ['Ouverture d’une officine — délai', [['#16a34a', '≤ 1 an / déjà'], ['#84cc16', '2-3 ans'], ['#eab308', '4-5 ans'], ['#f59e0b', '> 5 ans'], ['#dc2626', 'déclin (jamais)']]],
+  revColor: ['Potentiel de revenu par officine', [['#16a34a', 'excellent'], ['#84cc16', 'bon'], ['#eab308', 'moyen'], ['#f59e0b', 'faible'], ['#dc2626', 'très faible']]],
+};
+const HEAT_PALETTE = ['#16a34a', '#84cc16', '#eab308', '#f59e0b', '#dc2626'];
+let heatEnabled = new Set(HEAT_PALETTE);
+function renderFilters(key) {
+  const box = document.getElementById('heat-filters');
+  if (!key) { box.innerHTML = ''; return; }
+  const [title, items] = HEAT_LEGEND[key];
+  box.innerHTML = '<div class="heat-ftitle">' + title + '</div><div class="heat-chips">'
+    + items.map(([c, l]) => '<button type="button" class="heat-chip' + (heatEnabled.has(c) ? '' : ' off') + '" data-c="' + c + '"><span class="sw" style="background:' + c + '"></span>' + l + '</button>').join('')
+    + '</div>';
+  box.querySelectorAll('.heat-chip').forEach(ch => ch.onclick = () => {
+    const c = ch.dataset.c;
+    if (heatEnabled.has(c)) heatEnabled.delete(c); else heatEnabled.add(c);
+    ch.classList.toggle('off', !heatEnabled.has(c));
+    if (heatLayer) heatLayer.setFilter(heatEnabled);
+  });
+}
+function setupHeatmaps(idx) {
+  heatLayer = new HeatCanvas(buildHeatData(idx));
+  heatLayer._filter = heatEnabled;
+  const panel = document.getElementById('heat-panel');
+  document.getElementById('heat-toggle').onclick = () => panel.classList.toggle('collapsed');
+  document.querySelectorAll('#seg-heat button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('#seg-heat button').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    const h = b.dataset.h, key = h === 'rev' ? 'revColor' : h === 'year' ? 'yearColor' : null;
+    document.getElementById('heat-state').textContent = h === 'rev' ? 'Revenu' : h === 'year' ? 'Ouverture' : 'Aucun';
+    if (!key) { if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer); renderFilters(null); }
+    else { heatLayer.setKey(key); heatLayer.setFilter(heatEnabled); if (!map.hasLayer(heatLayer)) heatLayer.addTo(map); renderFilters(key); }
+  });
+}
+
+// ---------- chargement des 3 fichiers socle ----------
+const bootTxt = document.getElementById('boot-txt');
+const FILES = [['IRIS','data/iris.json'],['communes','data/communes.json'],['équip.','data/iris-equip.json'],['officines','data/pharmacies.json'],['évolution','data/communes-evol.json'],['ménages','data/communes-demo.json'],['santé','data/sante-points.json']];
+let nDone = 0;
+const DATA_V = '20260731e';                      // bump quand un fichier data change (busting cache)
+Promise.all(FILES.map(([lab, u]) =>
+  fetch(u + '?v=' + DATA_V).then(r => {
+    if (!r.ok) throw new Error(u + ' → HTTP ' + r.status);
+    const ct = r.headers.get('content-type') || '';
+    if (ct.indexOf('json') < 0) throw new Error(u + ' → type « ' + ct + ' » (redirection auth ou mauvais chemin ?)');
+    return r.json();
+  }).then(j => { nDone++; if (bootTxt) bootTxt.textContent = 'Chargement des données… (' + nDone + '/' + FILES.length + ')'; return j; })
+)).then(([iris, communes, equip, pharmacies, evol, sociodemo, santePoints]) => {
+  idx = indexData({ iris, communes, equip, pharmacies, evol, sociodemo, santePoints });
+  setupHeatmaps(idx);
+  boot.style.display = 'none';
+  refreshPharmBase();
+  // rejoue une analyse encodée dans l'URL (#lat,lon,mode,min,com)
+  if (location.hash.length > 1) replayFromHash();
+}).catch(e => bootErr(e.message));
+
+// ---------- réglages ----------
+function updateAnalysisState() {
+  const el = document.getElementById('analysis-state');
+  if (el) el.textContent = (state.mode === 'walk' ? 'À pied' : 'Voiture') + ' · ' + state.minutes + '′';
+}
+updateAnalysisState();
+document.getElementById('analysis-toggle').onclick = () => document.getElementById('analysis-panel').classList.toggle('collapsed');
+document.querySelectorAll('#seg-mode button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#seg-mode button').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel'); state.mode = b.dataset.m; updateAnalysisState(); if (state.lat != null) run();
+});
+document.querySelectorAll('#seg-time button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#seg-time button').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel'); state.minutes = +b.dataset.t; updateAnalysisState(); if (state.lat != null) run();
+});
+
+// ---------- pose de point ----------
+map.on('click', e => setSite(e.latlng.lat, e.latlng.lng));
+
+async function setSite(lat, lon) {
+  state.lat = lat; state.lon = lon; state.implCom = null; state.name = '';
+  emptyHint.style.display = 'none';
+  if (marker) marker.setLatLng([lat, lon]);
+  else marker = L.marker([lat, lon], { icon: makePin('#0F766E', 'storefront', 22), draggable: true }).addTo(map)
+    .on('dragend', ev => { const ll = ev.target.getLatLng(); setSite(ll.lat, ll.lng); });
+  // reverse-geocode BAN -> commune INSEE (citycode) + nom, stocké dans l'état (rejeu déterministe)
+  try {
+    const j = await (await fetch(`https://api-adresse.data.gouv.fr/reverse/?lat=${lat}&lon=${lon}`)).json();
+    const pr = j.features && j.features[0] && j.features[0].properties;
+    if (pr) { state.implCom = pr.citycode; state.name = pr.city || pr.name || ''; }
+  } catch (_) {}
+  run();
+}
+
+// ---------- analyse ----------
+async function run() {
+  if (state.lat == null || !idx) return;
+  const token = JSON.stringify([state.lat, state.lon, state.mode, state.minutes]);
+  runToken = token;
+  openFiche(); setFicheLoading();
+  // 3 anneaux de chalandise : 1/3, 2/3, temps total
+  const m = state.minutes;
+  const times = [...new Set([Math.max(1, Math.round(m/3)), Math.max(2, Math.round(2*m/3)), m])];
+  let isos;
+  try {
+    // traffic=approximated (voiture uniquement) : sans ce paramètre, Geoapify calcule en "free_flow"
+    // (vitesses limites, sans congestion réelle) et surestime nettement la zone atteignable par
+    // rapport à un vrai trajet Google Maps — cf. docs/historique.md (2026-08-04).
+    const trafficQS = state.mode === 'drive' ? '&traffic=approximated' : '';
+    isos = await Promise.all(times.map(t =>
+      fetch(`geoapify-iso/x?lat=${state.lat}&lon=${state.lon}&type=time&mode=${state.mode}&range=${t*60}${trafficQS}`).then(r => r.json())));
+  } catch (_) { if (runToken === token) setFicheError('Zone atteignable indisponible (quota ?).'); return; }
+  if (runToken !== token) return;                       // réglages changés depuis
+  const full = isos[isos.length - 1];
+  if (!full.features || !full.features.length) return setFicheError('Aucune zone renvoyée pour ce point.');
+  drawRings(isos);
+  const res = analyze(idx, full, { lat: state.lat, lon: state.lon }, { implCom: state.implCom || undefined });
+  const pops = isos.map(iso => zonePopulation(idx, iso));
+  // l'anneau primaire inclut au moins l'IRIS du point (un anneau plus petit qu'un IRIS n'attrape aucun centroïde)
+  if (res.nearestIrisPop) pops[0] = Math.max(pops[0], res.nearestIrisPop);
+  for (let i = 1; i < pops.length; i++) pops[i] = Math.max(pops[i], pops[i - 1]);
+  res.rings = times.map((t, i) => ({ minutes: t, popCumul: pops[i] }));
+  lastResult = res; lastIsoFull = full;
+  drawGeneralistes(res.prescripteurs ? res.prescripteurs.liste : []);
+  drawPharmacies(res.competition ? res.competition.liste : []);
+  renderFiche(res);
+  updateHash();
+}
+
+function drawGeneralistes(list) {
+  if (genLayer) { map.removeLayer(genLayer); genLayer = null; }
+  if (!list || !list.length) return;
+  genLayer = L.layerGroup(list.map(p =>
+    L.circleMarker([p.lat, p.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: '#2f6fed', fillOpacity: 1 })
+      .bindTooltip('Médecin généraliste · ' + p.dist + ' km')
+  )).addTo(map);
+}
+// couche de fond : toutes les officines connues (data/pharmacies.json), visibles en permanence à
+// partir du zoom PHARM_BASE_ZOOM (indépendamment de toute analyse), filtrées aux limites visibles
+// de la carte — même style que les pins de concurrence (croix verte), en plus petit pour les
+// distinguer visuellement des pins d'analyse.
+function refreshPharmBase() {
+  if (pharmBaseLayer) { map.removeLayer(pharmBaseLayer); pharmBaseLayer = null; }
+  if (!idx || !idx.pharmacies || map.getZoom() < PHARM_BASE_ZOOM) return;
+  const fp = idx.fp, b = map.getBounds().pad(0.2);
+  const S = b.getSouth(), N = b.getNorth(), W = b.getWest(), E = b.getEast();
+  const markers = [];
+  for (const p of idx.pharmacies.rows) {
+    const lon = p[fp.lon], lat = p[fp.lat];
+    if (lat < S || lat > N || lon < W || lon > E) continue;
+    const name = p[fp.name] || 'Pharmacie', city = p[fp.city];
+    markers.push(
+      L.marker([lat, lon], { icon: makePin('#0b8043', 'cross', 16) })
+        .bindTooltip(escapeHtml(name) + (city ? ' · ' + escapeHtml(city) : ''))
+    );
+  }
+  pharmBaseLayer = L.layerGroup(markers).addTo(map);
+}
+map.on('moveend zoomend', refreshPharmBase);
+
+// pharmacies concurrentes en épingles vertes (croix officine) avec popup nom, comme la carte médicale
+function drawPharmacies(list) {
+  if (pharmLayer) { map.removeLayer(pharmLayer); pharmLayer = null; }
+  if (!list || !list.length) return;
+  pharmLayer = L.layerGroup(list.map(p => {
+    const html = '<div style="font-weight:700;font-size:13px">' + escapeHtml(p.name || 'Pharmacie') + '</div>'
+      + (p.city ? '<div style="font-size:12px;color:#667085;margin-top:2px">' + escapeHtml(p.city) + '</div>' : '')
+      + '<div style="font-size:12px;color:#334155;margin-top:4px">à ' + p.dist + ' km du point analysé</div>';
+    return L.marker([p.lat, p.lon], { icon: makePin('#0b8043', 'cross', 22) }).bindPopup(html, { maxWidth: 240 });
+  })).addTo(map);
+}
+
+// styles par anneau : 0 = primaire (foncé, contour épais) → 2 = tertiaire (clair)
+const RING_STROKE = ['#083b36', '#0f766e', '#41b3a3'];
+const RING_FILL   = ['#0f766e', '#2a9d8f', '#8fd3c8'];
+const RING_FILLO  = [0.20, 0.12, 0.06];
+const RING_WEIGHT = [4, 2.75, 2];
+function drawRings(isos) {
+  ringLayers.forEach(l => map.removeLayer(l)); ringLayers = [];
+  for (let i = isos.length - 1; i >= 0; i--) {         // du plus grand (fond) au plus petit (avant)
+    const l = L.geoJSON(isos[i], { style: { color: RING_STROKE[i], weight: RING_WEIGHT[i], opacity: 1,
+      fillColor: RING_FILL[i], fillOpacity: RING_FILLO[i] } }).addTo(map);
+    ringLayers.push(l);
+  }
+  try { map.fitBounds(ringLayers[0].getBounds().pad(.08)); } catch (_) {}
+}
+
+// ---------- rendu fiche ----------
+const fiche = document.getElementById('fiche');
+const fmt = n => (n == null ? '—' : Math.round(n).toLocaleString('fr-FR'));
+const pct = x => (100 * x).toFixed(x < .1 ? 1 : 0) + ' %';
+function openFiche() { fiche.classList.add('open'); fiche.classList.remove('peek'); document.body.classList.add('fiche-open'); }
+document.getElementById('f-close').onclick = () => { fiche.classList.remove('open', 'peek'); document.body.classList.remove('fiche-open'); };
+
+// Bottom sheet mobile : glisser l'en-tête vers le bas = réduire (peek), tap sur l'en-tête réduit = rouvrir.
+(function sheetGestures() {
+  const hd = fiche.querySelector('.fiche-hd');
+  const PEEK = 66;
+  let sy = 0, base = 0, H = 0, drag = false, movedMax = 0;
+  const isMobile = () => window.innerWidth <= 680;
+  const baseOffset = () => fiche.classList.contains('peek') ? Math.max(0, H - PEEK) : 0;
+  hd.addEventListener('touchstart', e => {
+    if (!isMobile() || e.target.closest('#f-close, #f-actions')) return;
+    drag = true; movedMax = 0; sy = e.touches[0].clientY;
+    H = fiche.getBoundingClientRect().height; base = baseOffset();
+    fiche.classList.add('dragging');
+  }, { passive: true });
+  hd.addEventListener('touchmove', e => {
+    if (!drag) return;
+    const d = e.touches[0].clientY - sy; movedMax = Math.max(movedMax, Math.abs(d));
+    const y = Math.max(0, Math.min(H - PEEK, base + d));
+    fiche.style.transform = 'translateY(' + y + 'px)';
+  }, { passive: true });
+  hd.addEventListener('touchend', () => {
+    if (!drag) return; drag = false;
+    const m = /translateY\(([-\d.]+)px\)/.exec(fiche.style.transform || '');
+    const y = m ? parseFloat(m[1]) : base;
+    const startedPeek = base > 0, dragDist = y - base;
+    let peekTarget;
+    if (movedMax < 12) peekTarget = !startedPeek;        // tap = bascule
+    else if (startedPeek) peekTarget = false;            // depuis réduit : tout geste rouvre
+    else peekTarget = dragDist > 80;                     // depuis ouvert : réduire si glissé bas >80px
+    fiche.classList.remove('dragging');                  // rétablit la transition
+    fiche.classList.toggle('peek', peekTarget);          // pose l'état cible (l'inline masque encore)
+    fiche.style.transform = '';                          // retire l'inline → anime vers l'état cible
+  });
+})();
+function setFicheLoading() {
+  document.getElementById('f-title').textContent = state.name || 'Analyse en cours…';
+  document.getElementById('f-sub').textContent = `${state.minutes} min ${state.mode==='walk'?'à pied':'en voiture'}`;
+  document.getElementById('f-body').innerHTML = '<div style="text-align:center;color:var(--muted);padding:40px 0"><div class="spin"></div>Calcul de la maille…</div>';
+}
+function setFicheError(msg) { document.getElementById('f-body').innerHTML = `<div class="note">${msg}</div>`; }
+
+const FEU_LBL = {
+  vert: 'Création possible (quota réglementaire ouvert)',
+  orange: 'Quota atteint — entrée par transfert / rachat',
+  rouge: 'Sous le seuil de création (commune < 2 500 hab)',
+};
+
+const RING_C = ['#083b36', '#0f766e', '#41b3a3'];   // primaire→tertiaire (sync avec les contours carte)
+const RING_N = ['Zone primaire', 'Zone secondaire', 'Zone tertiaire'];
+const RING_S = ['proximité immédiate', 'fréquentation régulière', 'clientèle occasionnelle'];
+
+function densRow(label, val, nat) {
+  const scale = Math.max(val, nat) * 1.3 || 1;
+  const delta = nat ? Math.round((val / nat - 1) * 100) : 0;
+  const col = delta >= 8 ? '#15803d' : delta <= -8 ? '#b91c1c' : 'var(--muted)';
+  return `<div class="dcmp"><span>${label}</span>
+    <span class="v" style="color:${col}">${val}/10k <small style="color:var(--muted);font-weight:500">· Fr ${nat.toFixed(1)} · ${delta>=0?'+':''}${delta}%</small></span>
+    <div class="bar2"><i style="width:${(val/scale*100).toFixed(0)}%"></i><u style="left:${(nat/scale*100).toFixed(0)}%"></u></div></div>`;
+}
+
+function evolChart(ev) {
+  const W = 300, H = 118, padX = 4, padTop = 8, padBot = 20;
+  const n = ev.years.length, y0 = ev.years[0], yN = ev.years[n - 1];
+  const xs = ev.years.map(y => padX + (y - y0) / (yN - y0) * (W - 2 * padX));   // axe temps proportionnel
+  const all = ev.mailleIndex.concat(ev.franceIndex);
+  let lo = Math.min(...all), hi = Math.max(...all);                            // marge verticale (évite d'exagérer)
+  const c = (lo + hi) / 2, h2 = Math.max((hi - lo) / 2, 4) * 1.5;
+  lo = c - h2; hi = c + h2; const span = hi - lo;
+  const Y = v => padTop + (1 - (v - lo) / span) * (H - padTop - padBot);
+  const seg = (arr, a, b) => arr.slice(a, b + 1).map((v, i) => xs[a + i].toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
+  const pf = ev.projFrom != null ? ev.projFrom : n - 1;   // indice où commence la projection
+  const labels = ev.years.map((y, i) => {
+    const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+    return `<text x="${xs[i].toFixed(1)}" y="${H - 5}" font-size="9" fill="var(--muted)" text-anchor="${anchor}">${y === 2025 ? '2025*' : y}</text>`;
+  }).join('');
+  const li = ev.mailleIndex.length - 1;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="118" style="overflow:visible" preserveAspectRatio="none">
+    <polyline fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="4 4" points="${seg(ev.franceIndex, 0, n - 1)}"/>
+    <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" points="${seg(ev.mailleIndex, 0, pf)}"/>
+    <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="3 3" opacity=".75" points="${seg(ev.mailleIndex, pf, n - 1)}"/>
+    <circle cx="${xs[li].toFixed(1)}" cy="${Y(ev.mailleIndex[li]).toFixed(1)}" r="3.5" fill="var(--accent)"/>
+    ${labels}
+  </svg>`;
+}
+function evolNote(ev) {
+  const dm = ev.mailleGrowth, df = ev.franceGrowth;
+  if (dm < 0) return `Population en <b>recul</b> (${dm} % depuis 2006) alors que la France progresse de +${df} % → marché en contraction, volumes à surveiller.`;
+  if (dm < df * 0.6) return `Croissance <b>plus lente que la France</b> (+${dm} % vs +${df} %) → marché mature, volumes stables.`;
+  return `Croissance <b>soutenue</b> (+${dm} % depuis 2006, France +${df} %) → dynamique démographique favorable.`;
+}
+function miniBar(label, value, total, maxShare, color) {
+  const share = total ? value / total : 0;
+  const w = maxShare ? Math.min(100, share / maxShare * 100) : 0;
+  return `<div class="mbar"><span class="mbar-l">${label}</span><span class="mbar-t"><i style="width:${w.toFixed(0)}%;background:${color}"></i></span><span class="mbar-v">${(share * 100).toFixed(1)} %</span></div>`;
+}
+const AGE_BRACKETS = [['0-14 ans', 'a0_14'], ['15-29 ans', 'a15_29'], ['30-44 ans', 'a30_44'], ['45-59 ans', 'a45_59'], ['60-74 ans', 'a60_74'], ['75 ans et +', 'a75p']];
+const CSP_LABELS = ['Agriculteurs', 'Artisans, commerçants', 'Cadres, prof. sup.', 'Prof. intermédiaires', 'Employés', 'Ouvriers', 'Retraités', 'Autres inactifs'];
+
+function renderFiche(r) {
+  const feu = r.quota.feu, v = r.verdict;
+  document.getElementById('f-title').textContent = state.name || 'Emplacement';
+  document.getElementById('f-sub').textContent =
+    `Maille ${state.minutes} min ${state.mode==='walk'?'à pied':'en voiture'} · ${r.maille.irisCount} IRIS · ${r.maille.communeCount} communes`;
+
+  const c = r.consumption, mix = c.mix, d = r.densite, comp = r.competition;
+  const barW = m => (100 * m).toFixed(1) + '%';
+  const incVs = r.income.vsFrance;
+  const ic = { pos: '+', neg: '−', neu: '·' };
+
+  // répartition par âge (6 tranches) + CSP (8 catégories)
+  const ages = r.demo.ages, csp = r.demo.csp;
+  let ageBars = '';
+  if (ages && r.demo.pop) {
+    const maxA = Math.max(...AGE_BRACKETS.map(([, k]) => ages[k])) / r.demo.pop;
+    ageBars = AGE_BRACKETS.map(([l, k]) => miniBar(l, ages[k], r.demo.pop, maxA, 'var(--accent)')).join('');
+  }
+  let cspBars = ''; const cspTot = csp ? csp.reduce((a, b) => a + b, 0) : 0;
+  if (cspTot) {
+    const maxC = Math.max(...csp) / cspTot;
+    cspBars = CSP_LABELS.map((l, i) => miniBar(l, csp[i], cspTot, maxC, '#3A6EA5')).join('');
+  }
+
+  // anneaux (population incrémentale par zone)
+  let prev = 0;
+  const ringRows = (r.rings || []).map((rg, i) => { const inc = rg.popCumul - prev; prev = rg.popCumul;
+    return `<div class="ring"><span class="sw" style="background:${RING_C[i]||'#5eb3ab'}"></span>
+      <div><b>${RING_N[i]||('Zone '+(i+1))}</b> <span class="s">· ≤ ${rg.minutes} min · ${RING_S[i]||''}</span></div>
+      <span class="v">${fmt(inc)} hab</span></div>`; }).join('');
+
+  // table concurrents (top 8, ville si dispo)
+  const compRows = (comp.liste || []).slice(0, 8).map(p =>
+    `<tr><td>${escapeHtml(p.name)}${p.city ? ' <span class="c">· '+escapeHtml(p.city)+'</span>' : ''}</td><td class="d">${p.dist} km</td></tr>`).join('');
+
+  document.getElementById('f-body').innerHTML = `
+    <span class="verdict-badge ${v.level}" style="display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:999px;font-weight:800;font-size:14px"><span class="dot" style="width:9px;height:9px;border-radius:999px;background:currentColor"></span>${v.label}</span>
+    <ul class="drivers">
+      ${r.drivers.map(x => `<li class="${x.s}"><span class="ic">${ic[x.s]}</span><span>${x.t}</span></li>`).join('')}
+    </ul>
+
+    <div class="sec">
+      <div class="ca-card">
+        <div style="font-size:11px;font-weight:700;color:var(--accent);letter-spacing:.04em;margin-bottom:8px">MARCHÉ ADRESSABLE · POTENTIEL OFFICINE</div>
+        <div class="ca-big num">${fmt(c.marche_keur.total)}<span class="u"> k€ / an</span></div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">${fmt(c.perTete.total)} €/hab · indice <b class="num" style="color:${c.indice>=100?'var(--feu-vert)':'var(--feu-orange)'}">${c.indice}</b> (France = 100)</div>
+        <div class="bar">
+          <span style="width:${barW(mix.medic)};background:var(--c-med)"></span>
+          <span style="width:${barW(mix.materiel)};background:var(--c-mat)"></span>
+          <span style="width:${barW(mix.cosmeto)};background:var(--c-cos)"></span>
+        </div>
+        <div class="legend">
+          <span class="it"><span class="sw" style="background:var(--c-med)"></span>Médicaments <b class="num">${fmt(c.marche_keur.medic)} k€</b></span>
+          <span class="it"><span class="sw" style="background:var(--c-mat)"></span>Matériel <b class="num">${fmt(c.marche_keur.materiel)} k€</b></span>
+          <span class="it"><span class="sw" style="background:var(--c-cos)"></span>Cosméto <b class="num">${fmt(c.marche_keur.cosmeto)} k€</b></span>
+        </div>
+      </div>
+      <div class="note"><b>CA potentiel estimé : ${fmt(r.ca.potentiel_keur)} k€/an</b> (part de marché ${(100*r.ca.partMarche).toFixed(0)} % — parts égales entre les ${comp.pharma||1} officine(s) de la zone).</div>
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">01</span><h2>Population &amp; profil</h2></div>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Population captée</div><div class="v num">${fmt(r.demo.pop)}</div></div>
+        <div class="kpi"><div class="k">65 ans et +</div><div class="v num">${pct(r.demo.share65p)}</div><div class="d">75+ : ${pct(r.demo.share75p)}</div></div>
+        <div class="kpi"><div class="k">Revenu médian commune</div><div class="v num">${fmt(r.income.communeMedian)} €</div><div class="d ${incVs>=0?'up':'down'}">${incVs>=0?'+':''}${fmt(incVs)} € vs France</div></div>
+        <div class="kpi"><div class="k">0–14 ans</div><div class="v num">${pct(r.demo.share0_14)}</div></div>
+      </div>
+      ${r.evolution ? `
+      <div style="margin-top:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Évolution de la population — maille vs France <span style="font-weight:500;text-transform:none">(indice 100 en 2006)</span></div>
+        ${evolChart(r.evolution)}
+        <div class="legend" style="margin-top:4px">
+          <span class="it"><span class="sw" style="width:16px;height:3px;border-radius:2px;background:var(--accent)"></span>Maille <b>&nbsp;${r.evolution.mailleGrowth>=0?'+':''}${r.evolution.mailleGrowth} %</b></span>
+          <span class="it"><span class="sw" style="width:16px;height:3px;border-radius:2px;background:var(--muted)"></span>France <b>&nbsp;${r.evolution.franceGrowth>=0?'+':''}${r.evolution.franceGrowth} %</b></span>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:3px">* 2023–2025 = projection (tendance récente) ; recensements INSEE jusqu’à 2022.</div>
+        <div class="note">${evolNote(r.evolution)}</div>
+      </div>` : ''}
+      ${r.socio ? `
+      <div class="mini-h" style="margin-top:14px">Structure du foyer — commune d’implantation</div>
+      <div class="rows">
+        <div class="row"><span class="lab">Personnes / ménage</span><span class="val num">${r.socio.persMenage ?? '—'} <small>· France ${r.socio.natPersMen}</small></span></div>
+        ${r.socio.soldeNaturel != null ? `<div class="row"><span class="lab">Solde naturel (nais. − décès)</span><span class="val num" style="color:${r.socio.soldeNaturel>=0?'#15803d':'#b91c1c'}">${r.socio.soldeNaturel>=0?'+':''}${r.socio.soldeNaturel} %/an</span></div>` : ''}
+        ${r.socio.soldeMigratoire != null ? `<div class="row"><span class="lab">Solde migratoire (apparent)</span><span class="val num" style="color:${r.socio.soldeMigratoire>=0?'#15803d':'#b91c1c'}">${r.socio.soldeMigratoire>=0?'+':''}${r.socio.soldeMigratoire} %/an</span></div>` : ''}
+      </div>` : ''}
+      ${ageBars ? `<div style="margin-top:14px"><div class="mini-h">Répartition par âge</div>${ageBars}</div>` : ''}
+      ${cspBars ? `<div style="margin-top:14px"><div class="mini-h">Catégories socio-professionnelles <span style="text-transform:none;font-weight:500">(15 ans et +)</span></div>${cspBars}</div>` : ''}
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">02</span><h2>Positionnement — consommation</h2><span class="hint">le mix qui oriente l’offre</span></div>
+      <div class="rows">
+        <div class="row"><span class="lab"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--c-med);margin-right:6px"></span>Médicaments</span><span class="val num">${fmt(c.marche_keur.medic)} k€ <small>· ${pct(mix.medic)}</small></span></div>
+        <div class="row"><span class="lab"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--c-mat);margin-right:6px"></span>Matériel médical</span><span class="val num">${fmt(c.marche_keur.materiel)} k€ <small>· ${pct(mix.materiel)}</small></span></div>
+        <div class="row"><span class="lab"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--c-cos);margin-right:6px"></span>Cosméto / parapharmacie</span><span class="val num">${fmt(c.marche_keur.cosmeto)} k€ <small>· ${pct(mix.cosmeto)}</small></span></div>
+      </div>
+      <div class="note">${r.positioning}</div>
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">03</span><h2>Zone de chalandise</h2><span class="hint">3 anneaux · population</span></div>
+      ${ringRows || '<div class="note">Anneaux indisponibles.</div>'}
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">04</span><h2>Environnement concurrentiel</h2></div>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Officines dans la zone</div><div class="v num">${comp.pharma}</div><div class="d">densité ${comp.densite100k}/100k</div></div>
+        <div class="kpi"><div class="k">Hab. / officine</div><div class="v num">${fmt(comp.habParOfficine)}</div><div class="d ${comp.vsFrance>=0?'up':'down'}">${comp.vsFrance>=0?'+':''}${fmt(comp.vsFrance)} vs France (${fmt(comp.natHabParOfficine)})</div></div>
+      </div>
+      ${compRows ? `<table class="ctab">${compRows}</table>` : ''}
+      <div class="note">${comp.habParOfficine>=comp.natHabParOfficine
+        ? 'Densité <b>favorable</b> : moins d’officines par habitant que la moyenne nationale → marché moins disputé.'
+        : 'Densité <b>serrée</b> : davantage d’officines par habitant que la moyenne → concurrence marquée.'}</div>
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">05</span><h2>Armature médicale</h2><span class="hint">densité /10k vs France</span></div>
+      ${densRow('Généralistes', d.gen, d.nat.gen)}
+      ${densRow('Infirmiers', d.inf, d.nat.inf)}
+      ${densRow('Masseurs-kinés', d.kine, d.nat.kine)}
+      ${densRow('Chirurgiens-dentistes', d.dent, d.nat.dent)}
+      <div class="rows" style="margin-top:8px">
+        <div class="row"><span class="lab">Spécialistes · maisons de santé · labos</span><span class="val num">${r.armature.spec} · ${r.armature.msp} · ${r.armature.labo}</span></div>
+      </div>
+      ${r.prescripteurs && r.prescripteurs.count ? `
+      <div style="margin-top:10px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">${r.prescripteurs.count} généraliste(s) géolocalisé(s) <span style="font-weight:500;text-transform:none">— points bleus sur la carte</span></div>
+      <table class="ctab">${r.prescripteurs.liste.slice(0,6).map((p, i) => `<tr><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#2f6fed;margin-right:7px"></span>Médecin généraliste ${i+1}</td><td class="d">${p.dist} km</td></tr>`).join('')}</table>` : ''}
+      <div class="note"><b>L’ordonnance est le premier moteur du CA officine.</b> ${r.armature.gen} généraliste(s) et ${r.armature.spec} spécialiste(s) dans la maille. <span style="color:var(--muted)">Comptage par points géolocalisés BPE 2025 (base France : BPE ; le RPPS/annuaire donne des densités un peu plus basses).</span></div>
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">06</span><h2>Armature commerciale</h2><span class="hint">flux</span></div>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Commerces (total)</div><div class="v num">${r.commerce.total}</div><div class="d">dont alimentaire : ${r.commerce.alim}</div></div>
+        <div class="kpi"><div class="k">Écoles</div><div class="v num">${r.commerce.ecole}</div></div>
+      </div>
+    </div>
+
+    <div class="sec"><div class="sec-h"><span class="n">07</span><h2>Cadre réglementaire</h2></div>
+      <div class="feu ${feu}" style="margin-bottom:10px"><span class="dot"></span>${FEU_LBL[feu]}</div>
+      <div class="rows">
+        <div class="row"><span class="lab">Population commune (${r.income.implCommune||'—'})</span><span class="val num">${fmt(r.quota.communePop)}</span></div>
+        <div class="row"><span class="lab">Officines existantes / autorisées</span><span class="val num">${r.quota.existantes} / ${r.quota.autorisees}</span></div>
+        <div class="row"><span class="lab">Prochain seuil (officine suivante)</span><span class="val num">${fmt(r.quota.prochainSeuil)} hab</span></div>
+        <div class="row"><span class="lab">Population à atteindre</span><span class="val num" style="color:#b45309">+ ${fmt(r.quota.manqueHab)} hab</span></div>
+      </div>
+      <div class="note">Art. L.5125-11 CSP : 1<sup>re</sup> licence à 2 500 hab, +1 par tranche de 4 500 hab. ${
+        feu==='vert' ? 'Marge de <b>'+r.quota.marge+'</b> création(s) possible(s).'
+        : feu==='orange' ? 'Quota atteint : implantation par <b>transfert ou rachat</b>.'
+        : 'Commune sous le seuil : pas de création, entrée uniquement par <b>transfert/rachat</b> d’une officine existante.'}</div>
+    </div>
+
+    <div style="margin-top:22px;font-size:11px;color:var(--muted);line-height:1.5">
+      Sources : INSEE RP 2020 (IRIS), Filosofi 2020, BPE 2025 · FINESS (officines) · isochrone Geoapify ·
+      modèle de consommation calibré (bases nationales modulées par âge &amp; revenu). Estimations indicatives.
+    </div>
+  `;
+}
+
+// ---------- partage par lien (hash) ----------
+function updateHash() {
+  const h = [state.lat.toFixed(5), state.lon.toFixed(5), state.mode, state.minutes, state.implCom||''].join(',');
+  history.replaceState(null, '', '#' + h);
+}
+function replayFromHash() {
+  const p = decodeURIComponent(location.hash.slice(1)).split(',');
+  if (p.length < 4) return;
+  state.lat = +p[0]; state.lon = +p[1]; state.mode = p[2]; state.minutes = +p[3]; state.implCom = p[4] || null;
+  document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('sel', b.dataset.m === state.mode));
+  document.querySelectorAll('#seg-time button').forEach(b => b.classList.toggle('sel', +b.dataset.t === state.minutes));
+  updateAnalysisState();
+  emptyHint.style.display = 'none';
+  marker = L.marker([state.lat, state.lon], { icon: makePin('#0F766E','storefront',22), draggable: true }).addTo(map)
+    .on('dragend', ev => { const ll = ev.target.getLatLng(); setSite(ll.lat, ll.lng); });
+  run();
+}
+
+// ---------- exports & partage ----------
+function toast(msg) {
+  const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 1900);
+}
+function slug() {
+  return ((state.name || 'site').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()) || 'site';
+}
+function download(name, text, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+async function shareLink() {
+  const url = location.href;
+  if (navigator.share) { try { await navigator.share({ title: 'Analyse de site — ' + (state.name || ''), url }); return; } catch (_) {} }
+  try { await navigator.clipboard.writeText(url); toast('Lien copié'); }
+  catch (_) { prompt('Copiez le lien de l’analyse :', url); }
+}
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = src;
+    s.onload = res; s.onerror = () => rej(new Error(src)); document.head.appendChild(s);
+  });
+}
+let pdfLibsP = null;
+function ensurePdfLibs() {
+  if (!pdfLibsP) pdfLibsP = Promise.all([
+    loadScript('https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'),
+    loadScript('https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'),
+  ]);
+  return pdfLibsP;
+}
+async function exportPDF() {
+  if (!lastResult) return;
+  const r = lastResult, d = new Date().toLocaleDateString('fr-FR');
+  toast('Génération du PDF…');
+  try { await ensurePdfLibs(); } catch (_) { return toast('Générateur PDF indisponible (réseau ?)'); }
+  const head = '<div class="rep-head"><div class="rep-eyebrow">Analyse de site — Officine</div>'
+    + '<h1>' + escapeHtml(state.name || 'Emplacement') + '</h1>'
+    + '<div class="rep-sub">Maille ' + state.minutes + ' min ' + (state.mode === 'walk' ? 'à pied' : 'en voiture')
+    + ' · ' + r.maille.irisCount + ' IRIS · ' + r.maille.communeCount + ' communes · édité le ' + d + '</div></div>';
+  const cont = document.getElementById('report-inner');
+  cont.innerHTML = head + document.getElementById('f-body').innerHTML;
+  const rep = document.getElementById('report');
+  rep.style.cssText = 'display:block;position:fixed;left:-10000px;top:0;z-index:-1;';
+  try {
+    const canvas = await html2canvas(cont, { scale: 2, backgroundColor: '#ffffff', windowWidth: 800, useCORS: true });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+    const imgH = canvas.height * pw / canvas.width;
+    const img = canvas.toDataURL('image/jpeg', 0.92);
+    let heightLeft = imgH, position = 0;
+    pdf.addImage(img, 'JPEG', 0, position, pw, imgH); heightLeft -= ph;
+    while (heightLeft > 0) { position -= ph; pdf.addPage(); pdf.addImage(img, 'JPEG', 0, position, pw, imgH); heightLeft -= ph; }
+    pdf.save('analyse-' + slug() + '.pdf');
+    toast('PDF enregistré');
+  } catch (e) { toast('Échec PDF : ' + (e.message || e)); }
+  finally { rep.style.display = 'none'; cont.innerHTML = ''; }
+}
+function exportCSV() {
+  if (!lastResult) return;
+  const r = lastResult, c = r.consumption, cp = r.competition, rows = [['Indicateur', 'Valeur']];
+  const P = (k, v) => rows.push([k, v == null ? '' : v]);
+  P('Emplacement', state.name || ''); P('Commune (INSEE)', r.income.implCommune || '');
+  P('Zone', state.minutes + ' min ' + (state.mode === 'walk' ? 'à pied' : 'voiture'));
+  P('IRIS dans la maille', r.maille.irisCount); P('Communes', r.maille.communeCount);
+  P('Verdict', r.verdict.label);
+  P('Population captée', r.demo.pop);
+  P('Part 0-14 ans (%)', (r.demo.share0_14 * 100).toFixed(1));
+  P('Part 65+ (%)', (r.demo.share65p * 100).toFixed(1));
+  P('Part 75+ (%)', (r.demo.share75p * 100).toFixed(1));
+  P('Revenu médian commune (€)', r.income.communeMedian);
+  P('Revenu médian maille pondéré (€)', r.income.mailleMedian);
+  P('Marché adressable total (k€/an)', Math.round(c.marche_keur.total));
+  P('  dont médicaments (k€)', Math.round(c.marche_keur.medic));
+  P('  dont matériel médical (k€)', Math.round(c.marche_keur.materiel));
+  P('  dont cosméto/parapharma (k€)', Math.round(c.marche_keur.cosmeto));
+  P('Consommation / tête (€/hab)', Math.round(c.perTete.total));
+  P('Indice consommation (France=100)', c.indice);
+  P('CA potentiel estimé (k€/an)', Math.round(r.ca.potentiel_keur));
+  P('Officines dans la zone', cp.pharma);
+  P('Hab. / officine', cp.habParOfficine); P('Hab. / officine (France)', cp.natHabParOfficine);
+  P('Densité officinale /100k', cp.densite100k);
+  P('Généralistes (nb)', r.armature.gen); P('Généralistes /10k', r.densite.gen);
+  P('Spécialistes (nb)', r.armature.spec);
+  P('Infirmiers /10k', r.densite.inf); P('Kinés /10k', r.densite.kine); P('Dentistes /10k', r.densite.dent);
+  P('Maisons de santé', r.armature.msp); P('Labos', r.armature.labo);
+  P('Commerces (total)', r.commerce.total); P('  dont alimentaire', r.commerce.alim); P('Écoles', r.commerce.ecole);
+  P('Population commune', r.quota.communePop); P('Seuil 1re officine', r.quota.seuil);
+  P('Écart au seuil (hab)', r.quota.ecartSeuil);
+  P('Officines autorisées', r.quota.autorisees); P('Officines existantes', r.quota.existantes);
+  P('Feu réglementaire', r.quota.feu);
+  rows.push([]); rows.push(['Officines concurrentes', 'Ville', 'Distance (km)']);
+  (cp.liste || []).forEach(p => rows.push([p.name, p.city, p.dist]));
+  // Texte commençant par = + - @ \t \r : préfixé d'une apostrophe pour qu'Excel ne l'exécute pas
+  // comme une formule (noms venus d'OpenStreetMap). Les nombres restent des nombres.
+  const cell = x => typeof x === 'string' && /^[=+\-@\t\r]/.test(x) ? "'" + x : x;
+  const csv = '﻿' + rows.map(rw => rw.map(x => '"' + String(cell(x)).replace(/"/g, '""') + '"').join(';')).join('\r\n');
+  download('analyse-' + slug() + '.csv', csv, 'text/csv;charset=utf-8');
+  toast('Export Excel/CSV');
+}
+function exportGeoJSON() {
+  if (!lastResult || !lastIsoFull) return;
+  const r = lastResult, feats = [];
+  feats.push({ type: 'Feature', properties: { type: 'site', name: state.name || 'Site', commune: r.income.implCommune || '' }, geometry: { type: 'Point', coordinates: [state.lon, state.lat] } });
+  (lastIsoFull.features || []).forEach(f => feats.push({ type: 'Feature', properties: { type: 'isochrone', minutes: state.minutes, mode: state.mode }, geometry: f.geometry }));
+  (r.competition.liste || []).forEach(p => feats.push({ type: 'Feature', properties: { type: 'officine', name: p.name, ville: p.city, dist_km: p.dist }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
+  (r.mailleIris || []).forEach(i => feats.push({ type: 'Feature', properties: { type: 'iris', iris: i.iris, commune: i.com, pop: i.pop }, geometry: { type: 'Point', coordinates: [i.lon, i.lat] } }));
+  download('maille-' + slug() + '.geojson', JSON.stringify({ type: 'FeatureCollection', features: feats }), 'application/geo+json');
+  toast('Export GeoJSON (SIG)');
+}
+document.getElementById('act-share').onclick = shareLink;
+document.getElementById('act-pdf').onclick = exportPDF;
+document.getElementById('act-csv').onclick = exportCSV;
+document.getElementById('act-geojson').onclick = exportGeoJSON;
+
+// ---------- recherche d'adresse ----------
+async function geocode(q) {
+  const j = await (await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(q)}&limit=1`)).json();
+  const f = j.features && j.features[0];
+  return f ? { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] } : null;
+}
+document.getElementById('search-btn').onclick = async () => {
+  const q = document.getElementById('city-input').value.trim(); if (!q) return;
+  const r = await geocode(q); if (!r) return;
+  map.setView([r.lat, r.lon], 13); setSite(r.lat, r.lon);
+};
+document.getElementById('city-input').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('search-btn').click(); });
+</script>
+</body>
+</html>
